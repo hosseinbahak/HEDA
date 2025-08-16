@@ -1,0 +1,9 @@
+{
+  "E101": "Circular reasoning",
+  "E102": "Unsupported assumption",
+  "E103": "Flawed deduction",
+  "E201": "Factual inaccuracy",
+  "E202": "Calculation error",
+  "E301": "Term misinterpretation"
+}
+

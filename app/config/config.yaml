@@ -1,0 +1,35 @@
+# use_openrouter: true
+
+# roles:
+#   prosecutor: "openai/gpt-4o-mini"
+#   reflector:  "google/gemini-1.5-flash"
+#   defense:    "google/gemini-1.5-flash"
+#   judge:      "anthropic/claude-3-opus"   # ← your judge LLM here
+
+# model_tiers:
+#   efficient: ["openrouter/mini"]
+#   balanced:  ["openai/gpt-4o-mini", "google/gemini-1.5-flash"]
+#   premium:   ["openai/gpt-4o", "anthropic/claude-3-opus"]
+
+# max_rounds: 1
+# consensus_threshold: 0.7
+# confidence_threshold: 0.6
+
+
+use_openrouter: true
+
+# JSON-safe choices on OpenRouter to avoid 400 with response_format
+roles:
+  prosecutor: "openai/gpt-4o-mini"
+  reflector:  "openai/gpt-4o-mini"   # was gemini-1.5-flash → caused 400 with JSON mode
+  defense:    "openai/gpt-4o-mini"   # was gemini-1.5-flash
+  judge:      "openai/gpt-4o"        # strong + JSON-friendly
+
+model_tiers:
+  efficient: ["openai/gpt-4o-mini"]
+  balanced:  ["openai/gpt-4o-mini"]
+  premium:   ["openai/gpt-4o", "anthropic/claude-3-5-sonnet-20240620"]  # judge-only; may ignore JSON mode
+
+max_rounds: 1
+consensus_threshold: 0.7
+confidence_threshold: 0.6

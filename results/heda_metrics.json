@@ -1,0 +1,8 @@
+{
+  "samples": 6,
+  "accuracy": 0.5,
+  "precision_error": 0.0,
+  "recall_error": 0.0,
+  "f1_error": 0.0,
+  "ece": 0.1
+}

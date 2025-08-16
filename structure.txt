@@ -1,0 +1,34 @@
+heda_framework/
+├── README.md
+├── requirements.txt
+├── .env.example
+├── app/
+│   ├── main_app.py
+│   ├── orchestrator.py
+│   ├── templates/
+│   │   └── index.html
+│   ├── agents/
+│   │   ├── base.py
+│   │   ├── prosecutor.py
+│   │   ├── reflector.py
+│   │   ├── defense.py
+│   │   └── judge.py
+│   ├── services/
+│   │   ├── bias.py
+│   │   └── consensus.py
+│   └── config/
+│       ├── config.yaml
+│       ├── taxonomy.json
+│       └── prompts.py
+├── eval/
+│   ├── report.py
+│   ├── adapters/
+│   │   └── README.md
+│   ├── datasets/
+│   │   └── toy_reasoning.jsonl
+│   ├── metrics/
+│   │   └── compute_metrics.py
+│   └── runners/
+│       └── run_heda.py
+└── results/
+    (created at runtime)

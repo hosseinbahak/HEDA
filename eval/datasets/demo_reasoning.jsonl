@@ -1,0 +1,6 @@
+{"id": "bat_and_ball", "prompt": "A bat and a ball cost $1.10 in total. The bat costs $1 more than the ball. How much does the ball cost?", "gold_has_error": true}
+{"id": "triangle_angles", "prompt": "The sum of angles in a triangle is 180°. If two angles are 50° and 60°, the third angle is 70°.", "gold_has_error": false}
+{"id": "prime_sum", "prompt": "The sum of two prime numbers is always even.", "gold_has_error": true}
+{"id": "gravity_on_moon", "prompt": "Gravity on the Moon is weaker than on Earth because the Moon has less mass.", "gold_has_error": false}
+{"id": "water_boiling_point", "prompt": "Water boils at 100°C at sea level pressure.", "gold_has_error": false}
+{"id": "capitals_confusion", "prompt": "The capital of Australia is Sydney.", "gold_has_error": true}

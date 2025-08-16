@@ -1,0 +1,238 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <title>HEDA — Minimal Live Judge</title>
+  <style>
+    :root { --border:#e5e7eb; --bg:#f6f8fa; --ink:#111827; --muted:#6b7280; --pill:#eef2ff; --pill-ink:#3730a3; }
+    body { font-family: system-ui, -apple-system, Segoe UI, Roboto, Arial; max-width: 980px; margin: 2rem auto; padding: 0 1rem; color: var(--ink); }
+    textarea { width: 100%; min-height: 160px; padding: 12px; border:1px solid var(--border); border-radius: 10px; }
+    pre { background: var(--bg); padding: 12px; border-radius: 10px; overflow: auto; border:1px solid var(--border); }
+    .btn { background: #111827; color: #fff; padding: 10px 14px; border: 0; border-radius: 10px; cursor: pointer; font-weight: 600; }
+    .btn.secondary { background: #f3f4f6; color:#111827; border:1px solid var(--border); }
+    .row { margin: 1rem 0; }
+    .pill { display: inline-block; padding: 6px 10px; border-radius: 999px; background: var(--pill); color: var(--pill-ink); font-weight: 700; }
+    .muted { color: var(--muted); }
+    .metrics { display:flex; gap:10px; flex-wrap: wrap; }
+    .metric { background:#fff; border:1px solid var(--border); border-radius:10px; padding:8px 10px; }
+    table { border-collapse: collapse; width: 100%; }
+    th, td { text-align: left; border-bottom: 1px solid var(--border); padding: 10px; vertical-align: top; }
+    th { background: #fafafa; font-weight: 700; }
+    code { background:#f3f4f6; padding: 2px 6px; border-radius:6px; }
+    details { margin-top: 14px; }
+    .tag { display:inline-block; padding:2px 8px; border-radius:999px; border:1px solid var(--border); background:#fff; }
+  </style>
+</head>
+<body>
+  <h1>HEDA — Minimal Multi-Agent Reasoning Judge</h1>
+  <p class="muted">Paste a reasoning trace (try the bat &amp; ball puzzle) and press <em>Evaluate</em>. You’ll get a Debate Table and a Round-by-Round Conversation table.</p>
+
+  <div class="row">
+    <textarea id="t" placeholder="Paste LLM reasoning here..."></textarea>
+  </div>
+  <div class="row" style="display:flex; gap:10px;">
+    <button class="btn" onclick="run()">Evaluate</button>
+    <button class="btn secondary" onclick="clearOut()">Clear</button>
+  </div>
+
+  <div id="header"></div>
+  <div id="tableWrap" class="row"></div>
+
+  <!-- NEW: Round-by-Round Conversation -->
+  <div id="conversationWrap" class="row"></div>
+
+  <div id="extras" class="row"></div>
+
+  <details class="row">
+    <summary><strong>Raw response (debug)</strong></summary>
+    <pre id="raw"></pre>
+  </details>
+
+<script>
+function clearOut(){
+  document.getElementById('t').value = '';
+  document.getElementById('header').innerHTML = '';
+  document.getElementById('tableWrap').innerHTML = '';
+  document.getElementById('conversationWrap').innerHTML = '';
+  document.getElementById('extras').innerHTML = '';
+  document.getElementById('raw').textContent = '';
+}
+
+function pillVerdict(verdict){
+  const cls = 'pill';
+  return `<span class="${cls}">${verdict || '—'}</span>`;
+}
+
+function headerBlock(s){
+  const biases = (s.biases && s.biases.length) ? s.biases.join(', ') : 'None';
+  return `
+    <div class="row">
+      <div class="metrics">
+        <div class="metric">${pillVerdict(s.verdict)} </div>
+        <div class="metric"><strong>Confidence:</strong> ${(s.confidence ?? 0).toFixed(2)}</div>
+        <div class="metric"><strong>Consensus:</strong> ${(s.consensus ?? 0).toFixed(2)}</div>
+        <div class="metric"><strong>Biases:</strong> ${biases}</div>
+        <div class="metric"><strong>Charges:</strong> ${s.num_charges ?? 0}</div>
+      </div>
+    </div>
+  `;
+}
+
+function buildDebateTable(data){
+  const round = data.round || {};
+  const pros = (round.prosecutor && round.prosecutor.content) ? round.prosecutor.content : {};
+  const def  = (round.defense    && round.defense.content)    ? round.defense.content    : {};
+  const caseFile  = pros.case_file || [];
+  const rebuttals = def.rebuttals  || {};
+
+  if (!caseFile.length) {
+    return `
+      <div class="row">
+        <h3>Debate Table</h3>
+        <p class="muted">No charges filed by the Prosecutor.</p>
+      </div>
+    `;
+  }
+
+  const rows = caseFile.map(ch => {
+    const r = rebuttals[ch.charge_id] || {};
+    const sev = ch.severity ? `<small class="muted">${ch.severity}</small>` : '';
+    const conf = typeof r.confidence === 'number' ? `<br/><small class="muted">defense conf: ${r.confidence.toFixed(2)}</small>` : '';
+    return `
+      <tr>
+        <td><code>${ch.charge_id || ''}</code></td>
+        <td><strong>${ch.error_code || ''}</strong><br/>${sev}</td>
+        <td>${escapeHtml(ch.evidence || '')}</td>
+        <td>${r.rebuttal_argument ? escapeHtml(r.rebuttal_argument) : '<em class="muted">—</em>'}${conf}</td>
+      </tr>
+    `;
+  }).join('');
+
+  return `
+    <div class="row">
+      <h3>Debate Table</h3>
+      <table>
+        <thead>
+          <tr>
+            <th>Charge ID</th>
+            <th>Error Code</th>
+            <th>Prosecutor Evidence</th>
+            <th>Defense Rebuttal</th>
+          </tr>
+        </thead>
+        <tbody>${rows}</tbody>
+      </table>
+    </div>
+  `;
+}
+
+function buildConversationTable(conv){
+  if (!Array.isArray(conv) || conv.length === 0) {
+    return `
+      <div class="row">
+        <h3>Conversation (Rounds)</h3>
+        <p class="muted">No conversation log returned.</p>
+      </div>
+    `;
+  }
+
+  const rows = conv.map(turn => {
+    const ms = (typeof turn.duration_ms === 'number') ? `${turn.duration_ms.toFixed(1)} ms` : '—';
+    const summary = turn.summary ? escapeHtml(turn.summary) : '—';
+    const rawId = `raw_${turn.round}_${turn.role}`;
+    return `
+      <tr>
+        <td>${turn.round ?? '—'}</td>
+        <td><span class="tag">${turn.role || '—'}</span></td>
+        <td><code>${turn.model || '—'}</code></td>
+        <td>${summary}</td>
+        <td>${ms}</td>
+        <td>
+          <details>
+            <summary>view JSON</summary>
+            <pre id="${rawId}">${escapeHtml(JSON.stringify(turn.content || {}, null, 2))}</pre>
+          </details>
+        </td>
+      </tr>
+    `;
+  }).join('');
+
+  return `
+    <div class="row">
+      <h3>Conversation (Rounds)</h3>
+      <table>
+        <thead>
+          <tr>
+            <th>Round</th>
+            <th>Role</th>
+            <th>Model</th>
+            <th>Summary</th>
+            <th>Duration</th>
+            <th>Raw</th>
+          </tr>
+        </thead>
+        <tbody>${rows}</tbody>
+      </table>
+    </div>
+  `;
+}
+
+function buildExtras(data){
+  const round = data.round || {};
+  const refl = (round.reflector && round.reflector.content) ? round.reflector.content : {};
+  const judge = (round.judge && round.judge.content) ? round.judge.content : {};
+
+  const consensusPts = Array.isArray(refl.consensus_points) ? refl.consensus_points.map(c=>`<code>${c}</code>`).join(', ') : '—';
+  const reflQual = (typeof refl.confidence_in_debate_quality === 'number') ? refl.confidence_in_debate_quality.toFixed(2) : '—';
+  const judgeReason = judge.reasoning ? escapeHtml(judge.reasoning) : '—';
+
+  return `
+    <div class="row">
+      <h3>Extras</h3>
+      <div class="metrics">
+        <div class="metric"><strong>Reflector consensus:</strong> ${consensusPts}</div>
+        <div class="metric"><strong>Reflector quality conf:</strong> ${reflQual}</div>
+      </div>
+      <p style="margin-top:10px;"><strong>Judge reasoning:</strong><br/>${judgeReason}</p>
+    </div>
+  `;
+}
+
+function escapeHtml(s){
+  return String(s)
+    .replaceAll('&','&amp;')
+    .replaceAll('<','&lt;')
+    .replaceAll('>','&gt;');
+}
+
+async function run(){
+  const t = document.getElementById('t').value.trim();
+  if(!t){
+    alert('Please paste some reasoning text first.'); return;
+  }
+  const res = await fetch('/api/evaluate',{
+    method:'POST',
+    headers:{'Content-Type':'application/json'},
+    body:JSON.stringify({text:t})
+  });
+  const data = await res.json();
+
+  // Header metrics
+  const s = data.summary || {};
+  document.getElementById('header').innerHTML = headerBlock(s);
+
+  // Debate table
+  document.getElementById('tableWrap').innerHTML = buildDebateTable(data);
+
+  // NEW: Conversation table
+  document.getElementById('conversationWrap').innerHTML = buildConversationTable(data.conversation || []);
+
+  // Extras (reflector + judge reasoning)
+  document.getElementById('extras').innerHTML = buildExtras(data);
+
+  // Raw (debug)
+  document.getElementById('raw').textContent = JSON.stringify(data, null, 2);
+}
+</script>
+</body>
+</html>
