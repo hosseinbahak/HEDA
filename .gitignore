@@ -5,3 +5,5 @@
 # LangGraph
 .langgraph_api/
 .env
+
+/results
