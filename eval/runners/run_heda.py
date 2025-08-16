@@ -1,176 +1,172 @@
 import argparse
 import json
-import logging
 import os
-import sys
-import tempfile
+from typing import Dict, Any, List
 from pathlib import Path
-from typing import Any, Dict, Optional
+import sys
 
-# --- make repo root importable ---
-REPO_ROOT = Path(__file__).resolve().parents[2]
-if str(REPO_ROOT) not in sys.path:
-    sys.path.insert(0, str(REPO_ROOT))
+# Add project root to path
+sys.path.append(str(Path(__file__).parent.parent.parent))
 
-from dotenv import load_dotenv
 from app.orchestrator import Orchestrator
-import yaml
+from app.provider import Provider
+from app.utils.logger import get_logger
+from app.utils.conversation_display import ConversationDisplay
 
-# ---------- Env & Logging ----------
-load_dotenv()
-logging.basicConfig(
-    level=os.getenv("LOG_LEVEL", "INFO"),
-    format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
-    handlers=[logging.StreamHandler()]
-)
-logger = logging.getLogger("heda.runner")
+logger = get_logger(__name__)
 
-# ---------- utils ----------
-def load_yaml(p: Path) -> Dict[str, Any]:
-    with p.open("r", encoding="utf-8") as f:
-        return yaml.safe_load(f) or {}
+def load_dataset(filepath: str) -> List[Dict[str, Any]]:
+    """Load JSONL dataset."""
+    samples = []
+    with open(filepath, 'r') as f:
+        for line in f:
+            samples.append(json.loads(line))
+    return samples
 
-def dump_yaml(obj: Dict[str, Any], p: Path):
-    with p.open("w", encoding="utf-8") as f:
-        yaml.safe_dump(obj, f, allow_unicode=True, sort_keys=False)
-
-def build_effective_config(base_cfg_path: Path,
-                           max_rounds: Optional[int]) -> Path:
-    """
-    A small overlay: read base config and optionally override keys like max_rounds.
-    Returns path to a temp YAML that Orchestrator will read.
-    """
-    cfg = load_yaml(base_cfg_path)
-    if max_rounds is not None:
-        cfg["max_rounds"] = int(max_rounds)
-    # می‌توانی در آینده کلیدهای دیگری هم اینجا override کنی (مثلاً roles، thresholds، ...)
-    tmp = Path(tempfile.mkdtemp(prefix="heda_cfg_")) / "config.yaml"
-    dump_yaml(cfg, tmp)
-    return tmp
-
-def get_text(sample: Dict[str, Any]) -> str:
-    for k in ("prompt", "question", "problem", "response", "solution"):
-        v = sample.get(k)
-        if isinstance(v, str) and v.strip():
-            return v
-    raise ValueError("No input text in sample (expected: prompt/question/problem/response/solution).")
-
-def summary_to_prediction(summary: Dict[str, Any]) -> Dict[str, Any]:
-    verdict = summary.get("verdict") or summary.get("final_verdict") or ""
-    has_error = summary.get("has_error")
-    if has_error is None:
-        # fallback: استنتاج از verdict
-        has_error = str(verdict).strip().lower().startswith("error")
-    try:
-        conf = float(summary.get("confidence", 0.0))
-    except Exception:
-        conf = 0.0
-
-    # توضیح: اگر reasoning/ explanation نبود، یک خلاصه‌ی کوتاه بساز
-    explanation = (
-        summary.get("verdict_reasoning")
-        or summary.get("reasoning")
-        or summary.get("explanation")
-        or f"Verdict={verdict}; consensus={summary.get('consensus')}"
-    )
-    return {"has_error": bool(has_error), "confidence": conf, "explanation": explanation}
-
-def run_with_orchestrator(sample: Dict[str, Any],
-                          config_path: Path,
-                          use_roundtable: bool,
-                          trace_prefix: str) -> Dict[str, Any]:
-    sid = sample.get("id", "unknown")
-    text = get_text(sample)
-
-    orch = Orchestrator(
-        config_path=str(config_path),
-        trace_id=f"{trace_prefix}_{sid}",
-        use_roundtable=use_roundtable
-    )
-    full = orch.evaluate_text(text)
-
-    summary = full.get("summary") if isinstance(full, dict) else None
-    if not isinstance(summary, dict):
-        logger.warning("No 'summary' in orchestrator output; returning minimal prediction.")
+def serialize_message(msg: Any) -> Dict[str, Any]:
+    """Convert a message object to a JSON-serializable dictionary."""
+    if hasattr(msg, 'content') and hasattr(msg, 'additional_kwargs'):
         return {
-            "id": sid,
-            "prediction": {"has_error": True, "confidence": 0.0, "explanation": "No summary in output"},
-            "meta": {"framework": "HEDA-RoundTable" if use_roundtable else "HEDA-Traditional"}
+            'content': msg.content,
+            'role': msg.additional_kwargs.get('role', 'unknown'),
+            'round': msg.additional_kwargs.get('round', 0),
+            'type': 'message'
+        }
+    elif hasattr(msg, '__dict__'):
+        return msg.__dict__
+    else:
+        return str(msg)
+
+def make_json_serializable(obj: Any) -> Any:
+    """Recursively make an object JSON serializable."""
+    if isinstance(obj, dict):
+        return {k: make_json_serializable(v) for k, v in obj.items()}
+    elif isinstance(obj, list):
+        return [make_json_serializable(item) for item in obj]
+    elif hasattr(obj, 'content') and hasattr(obj, 'additional_kwargs'):
+        # Handle LangChain messages
+        return serialize_message(obj)
+    elif hasattr(obj, '__dict__'):
+        return make_json_serializable(obj.__dict__)
+    else:
+        try:
+            json.dumps(obj)
+            return obj
+        except TypeError:
+            return str(obj)
+
+def run_with_orchestrator(
+    text: str,
+    orch: Orchestrator,
+    display_conversation: bool = True,
+    console_display: ConversationDisplay = None
+) -> Dict[str, Any]:
+    """Run evaluation with orchestrator and optional conversation display."""
+    try:
+        result = orch.evaluate_text(text)
+        
+        # Display conversation if in roundtable mode and display is enabled
+        if orch.mode == "roundtable" and display_conversation and console_display:
+            console_display.display_complete_analysis(result)
+        
+        # Make result JSON serializable
+        return make_json_serializable(result)
+        
+    except Exception as e:
+        logger.error(f"Evaluation failed: {e}")
+        import traceback
+        traceback.print_exc()
+        return {
+            "error": str(e),
+            "mode": orch.mode,
+            "status": "failed"
         }
 
-    pred = summary_to_prediction(summary)
-    return {
-        "id": sid,
-        "prediction": pred,
-        "meta": {
-            "framework": "HEDA-RoundTable" if use_roundtable else "HEDA-Traditional",
-            "consensus": summary.get("consensus"),
-            "num_charges": summary.get("num_charges"),
-        }
-    }
+def save_results(results: List[Dict[str, Any]], output_path: str):
+    """Save results to JSONL file."""
+    os.makedirs(os.path.dirname(output_path) if os.path.dirname(output_path) else ".", exist_ok=True)
+    
+    with open(output_path, 'w') as f:
+        for result in results:
+            # Ensure the result is JSON serializable
+            serializable_result = make_json_serializable(result)
+            f.write(json.dumps(serializable_result) + '\n')
+    
+    logger.info(f"Results saved to {output_path}")
 
-# ---------- CLI ----------
 def main():
-    ap = argparse.ArgumentParser(description="Run HEDA (real Orchestrator; config-driven).")
-    ap.add_argument("--input", required=True, help="Input dataset JSONL (HEDA schema).")
-    ap.add_argument("--out", required=True, help="Output results JSONL.")
-    ap.add_argument("--mode", choices=["roundtable", "traditional"], default="roundtable",
-                    help="Use roundtable (LangGraph) or traditional pipeline.")
-    ap.add_argument("--config", default="app/config/config.yaml", help="Path to base config.yaml.")
-    # این فلگ‌ها دیگر مستقیم به Orchestrator نمی‌روند؛ از طریق overlay در config اعمال می‌شوند:
-    ap.add_argument("--max_rounds", type=int, default=None, help="Override config.max_rounds for roundtable.")
-    args = ap.parse_args()
-
-    in_path = Path(args.input).resolve()
-    out_path = Path(args.out).resolve()
-    base_cfg = Path(args.config).resolve()
-
-    if not in_path.exists():
-        logger.error(f"Input file not found: {in_path}")
-        raise SystemExit(1)
-    if not base_cfg.exists():
-        logger.error(f"Config file not found: {base_cfg}")
-        raise SystemExit(1)
-    out_path.parent.mkdir(parents=True, exist_ok=True)
-
-    # Overlay config for runtime overrides (e.g., max_rounds)
-    effective_cfg = build_effective_config(base_cfg, args.max_rounds)
-
-    use_rt = (args.mode == "roundtable")
-    prefix = "rt" if use_rt else "tr"
-
-    processed = 0
-    with in_path.open("r", encoding="utf-8") as fin, out_path.open("w", encoding="utf-8") as fout:
-        for line in fin:
-            line = line.strip()
-            if not line:
-                continue
-            try:
-                sample = json.loads(line)
-            except json.JSONDecodeError as e:
-                logger.error(f"Invalid JSON: {e}")
-                continue
-
-            logger.info(f"Processing sample ID: {sample.get('id','unknown')}, mode: {args.mode}")
-            try:
-                result = run_with_orchestrator(
-                    sample=sample,
-                    config_path=effective_cfg,
-                    use_roundtable=use_rt,
-                    trace_prefix=prefix
-                )
-            except Exception as e:
-                logger.exception(f"Evaluation failed: {e}")
-                result = {
-                    "id": sample.get("id","unknown"),
-                    "prediction": {"has_error": True, "confidence": 0.0, "explanation": f"orchestrator error: {e}"},
-                    "meta": {"framework": "HEDA-RoundTable" if use_rt else "HEDA-Traditional"}
-                }
-
-            fout.write(json.dumps(result, ensure_ascii=False) + "\n")
-            processed += 1
-
-    logger.info(f"Evaluation completed → {out_path} | processed={processed}")
+    parser = argparse.ArgumentParser(description="Run HEDA evaluation")
+    parser.add_argument("--input", required=True, help="Input JSONL file")
+    parser.add_argument("--out", required=True, help="Output JSONL file")
+    parser.add_argument("--mode", default="traditional", 
+                       choices=["traditional", "roundtable"],
+                       help="Evaluation mode")
+    parser.add_argument("--max_rounds", type=int, default=2,
+                       help="Maximum discussion rounds for roundtable mode")
+    parser.add_argument("--display_conversation", action="store_true", default=True,
+                       help="Display conversation in console")
+    parser.add_argument("--verbose", action="store_true",
+                       help="Verbose output")
+    parser.add_argument("--api_key", help="OpenRouter API key (or set OPENROUTER_API_KEY env var)")
+    
+    args = parser.parse_args()
+    
+    # Setup API key
+    api_key = args.api_key or os.getenv("OPENROUTER_API_KEY")
+    if not api_key:
+        logger.warning("No API key provided. Using mock provider.")
+    
+    # Initialize provider and orchestrator
+    provider = Provider(api_key=api_key)
+    orchestrator = Orchestrator(
+        provider=provider,
+        mode=args.mode,
+        max_rounds=args.max_rounds,
+        verbose=args.verbose
+    )
+    
+    # Initialize display if needed
+    console_display = ConversationDisplay() if args.display_conversation else None
+    
+    # Load dataset
+    samples = load_dataset(args.input)
+    logger.info(f"Loaded {len(samples)} samples from {args.input}")
+    
+    # Process samples
+    results = []
+    for i, sample in enumerate(samples):
+        sample_id = sample.get("id", f"sample_{i}")
+        text = sample.get("text", "")
+        
+        logger.info(f"Processing sample ID: {sample_id}, mode: {args.mode}")
+        
+        if console_display:
+            console_display.console.print(f"\n[bold cyan]Processing: {sample_id}[/bold cyan]")
+            console_display.console.print(f"[dim]Text: {text[:100]}...[/dim]\n")
+        
+        result = run_with_orchestrator(
+            text=text,
+            orch=orchestrator,
+            display_conversation=args.display_conversation,
+            console_display=console_display
+        )
+        
+        # Add metadata to result
+        result["sample_id"] = sample_id
+        result["original_text"] = text
+        results.append(result)
+    
+    # Save results
+    save_results(results, args.out)
+    
+    logger.info(f"Evaluation complete. Processed {len(results)} samples.")
+    
+    if console_display:
+        console_display.console.print(
+            f"\n[bold green]✅ Evaluation complete![/bold green]"
+            f"\nProcessed: {len(results)} samples"
+            f"\nOutput: {args.out}"
+        )
 
 if __name__ == "__main__":
     main()
