@@ -1,22 +1,4 @@
-# Update eval/run_comprehensive_evaluation.py
-# Add this to the existing file, modifying the argument parser and main logic
-
-import argparse
-import json
-import subprocess
-import time
-from pathlib import Path
-import sys
-import asyncio
-
-# Add to the argument parser section:
-parser.add_argument('--use-heda-judge', action='store_true', 
-                    help='Use HEDA round-table judge for evaluation')
-
-# Add HEDA-RoundTable as a system runner
-def create_heda_roundtable_runner():
-    """Create a runner for HEDA-RoundTable system"""
-    runner_code = '''
+#!/usr/bin/env python3
 import json
 import sys
 import asyncio
@@ -26,14 +8,20 @@ sys.path.append(str(Path(__file__).parent.parent.parent))
 from eval.judges.heda_roundtable_judge import HEDAJudgeSystem, JudgmentTask
 
 async def main():
+    if len(sys.argv) < 3:
+        print("Usage: python run_heda_roundtable.py <input_file> <output_file>")
+        sys.exit(1)
+        
     input_file = sys.argv[1]
     output_file = sys.argv[2]
     
+    print(f"Processing {input_file}...")
     judge = HEDAJudgeSystem()
     results = []
     
     with open(input_file, 'r') as f:
-        for line in f:
+        lines = f.readlines()
+        for i, line in enumerate(lines):
             item = json.loads(line.strip())
             task = JudgmentTask(
                 question=item.get('question', item.get('problem', '')),
@@ -46,7 +34,7 @@ async def main():
             
             # Format for evaluation pipeline
             formatted_result = {
-                'id': item.get('id', 'unknown'),
+                'id': item.get('id', f'item_{i}'),
                 'response': result,
                 'ground_truth': item.get('ground_truth', {}),
                 'prediction': result['judgment']
@@ -55,12 +43,9 @@ async def main():
     
     with open(output_file, 'w') as f:
         for result in results:
-            f.write(json.dumps(result) + '\\n')
+            f.write(json.dumps(result) + '\n')
+    
+    print(f"Processed {len(results)} items, saved to {output_file}")
 
 if __name__ == "__main__":
     asyncio.run(main())
-'''
-    
-    runner_path = Path("eval/runners/run_heda_roundtable.py")
-    runner_path.write_text(runner_code)
-    return runner_path
