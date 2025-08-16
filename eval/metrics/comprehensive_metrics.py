@@ -44,28 +44,100 @@ class LLMJudgeMetrics:
         self.results[system_name] = predictions
         print(f"Added {len(predictions)} predictions for {system_name}")
     
-    def compute_basic_metrics(self, system_name: str) -> Dict[str, float]:
-        """Compute standard classification metrics"""
-        predictions = self.results[system_name]
+    def _parse_prediction(self, prediction):
+        """Parse prediction from various formats"""
+        if isinstance(prediction, bool):
+            return prediction
+        elif isinstance(prediction, str):
+            # Try to detect error mentions in text
+            error_keywords = ['error', 'bug', 'issue', 'problem', 'incorrect', 'wrong', 'mistake']
+            return any(keyword in prediction.lower() for keyword in error_keywords)
+        elif isinstance(prediction, dict):
+            return prediction.get('has_error', False)
+        return False
+
+    def _parse_response(self, response):
+        """Parse HEDA response format"""
+        if isinstance(response, dict):
+            # Check for HEDA's round-table format
+            if 'final_answer' in response:
+                return self._parse_prediction(response['final_answer'])
+            elif 'consensus' in response:
+                return self._parse_prediction(response['consensus'])
+            elif 'decision' in response:
+                return self._parse_prediction(response['decision'])
+            elif 'analysis' in response:
+                return self._parse_prediction(response['analysis'])
+        return self._parse_prediction(response)
+    
+    def _extract_confidence(self, pred_data):
+        """Extract confidence score from various formats"""
+        if isinstance(pred_data, dict):
+            # Direct confidence field
+            if 'confidence' in pred_data:
+                return float(pred_data['confidence'])
+            # Check nested structures
+            if 'prediction' in pred_data and isinstance(pred_data['prediction'], dict):
+                if 'confidence' in pred_data['prediction']:
+                    return float(pred_data['prediction']['confidence'])
+            # Check response field
+            if 'response' in pred_data and isinstance(pred_data['response'], dict):
+                if 'confidence' in pred_data['response']:
+                    return float(pred_data['response']['confidence'])
+        # Default confidence
+        return 0.5
         
-        y_true, y_pred, y_prob, sample_ids = [], [], [], []
+    def compute_basic_metrics(self, system_name: str) -> Dict[str, float]:
+        """Compute basic metrics for a system"""
+        predictions = self.results.get(system_name, [])
+        if not predictions:
+            return {}
+        
+        y_true = []
+        y_pred = []
+        y_prob = []  # Initialize y_prob list
         
         for pred in predictions:
-            sample_id = pred['id']
-            if sample_id not in self.gold:
-                continue
-                
-            y_true.append(self.gold[sample_id]['has_error'])
-            y_pred.append(pred['prediction']['has_error'])
-            y_prob.append(pred['prediction']['confidence'])
-            sample_ids.append(sample_id)
+            # Get ground truth
+            sample_id = pred.get('id', '')
+            if sample_id in self.gold:
+                y_true.append(self.gold[sample_id]['has_error'])
+            elif 'ground_truth' in pred:
+                y_true.append(pred['ground_truth'].get('has_error', False))
+            else:
+                y_true.append(False)  # Default if no ground truth
+            
+            # Parse prediction and confidence
+            pred_value = False
+            conf_value = 0.5
+            
+            # Check multiple possible locations for prediction
+            if 'prediction' in pred:
+                if isinstance(pred['prediction'], dict):
+                    pred_value = pred['prediction'].get('has_error', False)
+                    conf_value = pred['prediction'].get('confidence', 0.5)
+                else:
+                    pred_value = self._parse_prediction(pred['prediction'])
+                    conf_value = 0.5
+            elif 'response' in pred:
+                pred_value = self._parse_response(pred['response'])
+                conf_value = self._extract_confidence(pred['response'])
+            elif 'output' in pred:
+                pred_value = self._parse_response(pred['output'])
+                conf_value = 0.5
+            
+            y_pred.append(pred_value)
+            y_prob.append(conf_value)
         
-        y_true, y_pred, y_prob = np.array(y_true), np.array(y_pred), np.array(y_prob)
+        # Convert to numpy arrays
+        y_true = np.array(y_true)
+        y_pred = np.array(y_pred)
+        y_prob = np.array(y_prob)
         
         # Basic metrics
         accuracy = accuracy_score(y_true, y_pred)
         precision, recall, f1, _ = precision_recall_fscore_support(
-            y_true, y_pred, average='binary', pos_label=True
+            y_true, y_pred, average='binary', pos_label=True, zero_division=0
         )
         
         # Confidence calibration (Expected Calibration Error)
@@ -73,9 +145,12 @@ class LLMJudgeMetrics:
         
         # Area under ROC curve
         try:
-            auc = roc_auc_score(y_true, y_prob)
-        except ValueError:
-            auc = 0.5  # Default for constant predictions
+            if len(np.unique(y_true)) > 1:
+                auc = roc_auc_score(y_true, y_prob)
+            else:
+                auc = 0.5  # Default for constant predictions
+        except (ValueError, TypeError):
+            auc = 0.5
         
         # Confidence-aware metrics
         confident_correct = np.mean((y_true == y_pred) & (y_prob > 0.8))
@@ -106,15 +181,24 @@ class LLMJudgeMetrics:
         explanation_quality_scores = []
         
         for pred in predictions:
-            sample_id = pred['id']
+            sample_id = pred.get('id', '')
             if sample_id not in self.gold:
                 continue
                 
             gold_item = self.gold[sample_id]
-            pred_item = pred['prediction']
             
-            is_correct = gold_item['has_error'] == pred_item['has_error']
-            confidence = pred_item['confidence']
+            # Parse prediction
+            pred_has_error = False
+            if 'prediction' in pred and isinstance(pred['prediction'], dict):
+                pred_has_error = pred['prediction'].get('has_error', False)
+                confidence = pred['prediction'].get('confidence', 0.5)
+            elif 'response' in pred:
+                pred_has_error = self._parse_response(pred['response'])
+                confidence = self._extract_confidence(pred['response'])
+            else:
+                confidence = 0.5
+            
+            is_correct = gold_item['has_error'] == pred_has_error
             
             # Group metrics
             difficulty = gold_item['difficulty']
@@ -125,37 +209,45 @@ class LLMJudgeMetrics:
             metrics_by_domain[domain].append((is_correct, confidence))
             metrics_by_error_type[error_type].append((is_correct, confidence))
             
-            # Reasoning depth: number of charges/evidence points
-            charges = pred_item.get('charges', [])
-            reasoning_depth = len(charges) if charges else 1
+            # Reasoning depth
+            if 'prediction' in pred and isinstance(pred['prediction'], dict):
+                charges = pred['prediction'].get('charges', [])
+                reasoning_depth = len(charges) if charges else 1
+            else:
+                reasoning_depth = 1
             reasoning_depth_scores.append(reasoning_depth)
             
-            # Explanation quality (simple heuristic based on explanation length and keywords)
+            # Explanation quality
             explanation = pred.get('meta', {}).get('explanation', '')
-            explanation_score = min(len(explanation.split()) / 50.0, 1.0)  # Normalize by 50 words
+            if not explanation and 'prediction' in pred and isinstance(pred['prediction'], dict):
+                explanation = pred['prediction'].get('explanation', '')
+            explanation_score = min(len(str(explanation).split()) / 50.0, 1.0)
             explanation_quality_scores.append(explanation_score)
         
         # Compute group-wise accuracies
         group_accuracies = {}
         
         for difficulty, results in metrics_by_difficulty.items():
-            accuracy = np.mean([r[0] for r in results])
-            confidence = np.mean([r[1] for r in results])
-            group_accuracies[f'accuracy_{difficulty}'] = accuracy
-            group_accuracies[f'confidence_{difficulty}'] = confidence
+            if results:
+                accuracy = np.mean([r[0] for r in results])
+                confidence = np.mean([r[1] for r in results])
+                group_accuracies[f'accuracy_{difficulty}'] = accuracy
+                group_accuracies[f'confidence_{difficulty}'] = confidence
         
         for domain, results in metrics_by_domain.items():
-            accuracy = np.mean([r[0] for r in results])
-            group_accuracies[f'accuracy_{domain}'] = accuracy
+            if results:
+                accuracy = np.mean([r[0] for r in results])
+                group_accuracies[f'accuracy_{domain}'] = accuracy
             
         for error_type, results in metrics_by_error_type.items():
-            accuracy = np.mean([r[0] for r in results])
-            group_accuracies[f'accuracy_{error_type}'] = accuracy
+            if results:
+                accuracy = np.mean([r[0] for r in results])
+                group_accuracies[f'accuracy_{error_type}'] = accuracy
         
         return {
             **group_accuracies,
-            'avg_reasoning_depth': np.mean(reasoning_depth_scores),
-            'avg_explanation_quality': np.mean(explanation_quality_scores),
+            'avg_reasoning_depth': np.mean(reasoning_depth_scores) if reasoning_depth_scores else 0,
+            'avg_explanation_quality': np.mean(explanation_quality_scores) if explanation_quality_scores else 0,
             'consistency_score': self._compute_consistency_score(system_name),
             'robustness_score': self._compute_robustness_score(system_name)
         }
@@ -170,31 +262,39 @@ class LLMJudgeMetrics:
         agent_participation_balance = []
         
         for pred in predictions:
-            # Skip if not a roundtable system
-            if pred.get('meta', {}).get('framework') != 'HEDA-RoundTable':
+            # Check if this is a roundtable system result
+            is_roundtable = (
+                pred.get('meta', {}).get('framework') == 'HEDA-RoundTable' or
+                'roundtable_conversation' in pred or
+                'roundtable' in system_name.lower()
+            )
+            
+            if not is_roundtable:
                 continue
                 
             conversation = pred.get('roundtable_conversation', [])
-            conversation_lengths.append(len(conversation))
+            if conversation:
+                conversation_lengths.append(len(conversation))
             
-            # Consensus rate (how often agents agreed)
-            consensus_points = len(pred.get('summary', {}).get('consensus_points', []))
-            total_charges = pred.get('summary', {}).get('num_charges', 1)
-            consensus_rates.append(consensus_points / max(total_charges, 1))
+            # Consensus rate
+            summary = pred.get('summary', {})
+            consensus_points = len(summary.get('consensus_points', []))
+            total_charges = summary.get('num_charges', 1)
+            if total_charges > 0:
+                consensus_rates.append(consensus_points / total_charges)
             
             # Debate quality
-            debate_quality = pred.get('summary', {}).get('debate_quality', 0.5)
+            debate_quality = summary.get('debate_quality', 0.5)
             debate_quality_scores.append(debate_quality)
             
-            # Agent participation balance (how evenly did agents participate?)
+            # Agent participation balance
             agent_turns = defaultdict(int)
             for turn in conversation:
                 agent_turns[turn.get('agent', 'unknown')] += 1
             
             if len(agent_turns) > 1:
                 turn_counts = list(agent_turns.values())
-                # Calculate coefficient of variation (lower = more balanced)
-                balance_score = 1.0 - (np.std(turn_counts) / np.mean(turn_counts))
+                balance_score = 1.0 - (np.std(turn_counts) / (np.mean(turn_counts) + 1e-6))
                 agent_participation_balance.append(max(balance_score, 0))
             else:
                 agent_participation_balance.append(0)
@@ -204,9 +304,9 @@ class LLMJudgeMetrics:
             
         return {
             'avg_conversation_length': np.mean(conversation_lengths),
-            'avg_consensus_rate': np.mean(consensus_rates),
-            'avg_debate_quality': np.mean(debate_quality_scores),
-            'avg_participation_balance': np.mean(agent_participation_balance),
+            'avg_consensus_rate': np.mean(consensus_rates) if consensus_rates else 0,
+            'avg_debate_quality': np.mean(debate_quality_scores) if debate_quality_scores else 0,
+            'avg_participation_balance': np.mean(agent_participation_balance) if agent_participation_balance else 0,
             'roundtable_samples': len(conversation_lengths)
         }
     
@@ -230,12 +330,24 @@ class LLMJudgeMetrics:
     
     def _compute_consistency_score(self, system_name: str) -> float:
         """Measure how consistent the system is on similar samples"""
-        # This would require additional data about similar samples
-        # For now, return a placeholder based on confidence variance
         predictions = self.results[system_name]
-        confidences = [p['prediction']['confidence'] for p in predictions]
-        consistency = 1.0 - (np.std(confidences) / max(np.mean(confidences), 0.1))
-        return max(consistency, 0.0)
+        confidences = []
+        
+        for pred in predictions:
+            if 'prediction' in pred and isinstance(pred['prediction'], dict):
+                confidences.append(pred['prediction'].get('confidence', 0.5))
+            else:
+                confidences.append(self._extract_confidence(pred))
+        
+        if not confidences:
+            return 0.5
+            
+        mean_conf = np.mean(confidences)
+        if mean_conf == 0:
+            return 0.0
+            
+        consistency = 1.0 - (np.std(confidences) / max(mean_conf, 0.1))
+        return max(min(consistency, 1.0), 0.0)
     
     def _compute_robustness_score(self, system_name: str) -> float:
         """Measure robustness across different types of errors"""
@@ -244,28 +356,35 @@ class LLMJudgeMetrics:
         error_type_accuracies = defaultdict(list)
         
         for pred in predictions:
-            sample_id = pred['id']
+            sample_id = pred.get('id', '')
             if sample_id not in self.gold:
                 continue
                 
             gold_item = self.gold[sample_id]
-            pred_item = pred['prediction']
             
-            is_correct = gold_item['has_error'] == pred_item['has_error']
+            # Parse prediction
+            if 'prediction' in pred and isinstance(pred['prediction'], dict):
+                pred_has_error = pred['prediction'].get('has_error', False)
+            elif 'response' in pred:
+                pred_has_error = self._parse_response(pred['response'])
+            else:
+                pred_has_error = False
+            
+            is_correct = gold_item['has_error'] == pred_has_error
             error_type = gold_item['error_type']
             
             error_type_accuracies[error_type].append(is_correct)
         
         if len(error_type_accuracies) <= 1:
-            return 0.5  # Not enough diversity to measure robustness
+            return 0.5
             
-        # Robustness = 1 - coefficient of variation of accuracies across error types
-        type_accs = [np.mean(accs) for accs in error_type_accuracies.values()]
-        if np.mean(type_accs) == 0:
+        # Robustness = 1 - coefficient of variation
+        type_accs = [np.mean(accs) for accs in error_type_accuracies.values() if accs]
+        if not type_accs or np.mean(type_accs) == 0:
             return 0.0
             
         robustness = 1.0 - (np.std(type_accs) / np.mean(type_accs))
-        return max(robustness, 0.0)
+        return max(min(robustness, 1.0), 0.0)
     
     def compare_systems(self) -> pd.DataFrame:
         """Generate comprehensive comparison table"""
@@ -287,10 +406,9 @@ class LLMJudgeMetrics:
         preds_b = self.results[system_b]
         
         # Match samples by ID
-        common_ids = set(p['id'] for p in preds_a) & set(p['id'] for p in preds_b)
-        
-        results_a = {p['id']: p['prediction']['has_error'] for p in preds_a if p['id'] in common_ids}
-        results_b = {p['id']: p['prediction']['has_error'] for p in preds_b if p['id'] in common_ids}
+        ids_a = {p.get('id', i): i for i, p in enumerate(preds_a)}
+        ids_b = {p.get('id', i): i for i, p in enumerate(preds_b)}
+        common_ids = set(ids_a.keys()) & set(ids_b.keys())
         
         # Compute accuracy for each system on common samples
         correct_a = []
@@ -299,23 +417,54 @@ class LLMJudgeMetrics:
         for sample_id in common_ids:
             if sample_id not in self.gold:
                 continue
+                
             gold_label = self.gold[sample_id]['has_error']
-            correct_a.append(results_a[sample_id] == gold_label)
-            correct_b.append(results_b[sample_id] == gold_label)
+            
+            # Get prediction A
+            pred_a = preds_a[ids_a[sample_id]]
+            if 'prediction' in pred_a and isinstance(pred_a['prediction'], dict):
+                pred_a_value = pred_a['prediction'].get('has_error', False)
+            elif 'response' in pred_a:
+                pred_a_value = self._parse_response(pred_a['response'])
+            else:
+                pred_a_value = False
+                
+            # Get prediction B
+            pred_b = preds_b[ids_b[sample_id]]
+            if 'prediction' in pred_b and isinstance(pred_b['prediction'], dict):
+                pred_b_value = pred_b['prediction'].get('has_error', False)
+            elif 'response' in pred_b:
+                pred_b_value = self._parse_response(pred_b['response'])
+            else:
+                pred_b_value = False
+            
+            correct_a.append(pred_a_value == gold_label)
+            correct_b.append(pred_b_value == gold_label)
+        
+        if not correct_a:
+            return {
+                'system_a': system_a,
+                'system_b': system_b,
+                'accuracy_a': 0,
+                'accuracy_b': 0,
+                'accuracy_diff': 0,
+                'p_value': 1.0,
+                'significant': False,
+                'common_samples': 0,
+                'a_correct_b_wrong': 0,
+                'a_wrong_b_correct': 0
+            }
         
         correct_a, correct_b = np.array(correct_a), np.array(correct_b)
         
-        # McNemar's test for paired binary classifications
+        # McNemar's test
         diff = correct_a.astype(int) - correct_b.astype(int)
-        
-        # Count disagreements
         a_correct_b_wrong = np.sum(diff == 1)
         a_wrong_b_correct = np.sum(diff == -1)
         
         if a_correct_b_wrong + a_wrong_b_correct < 10:
-            p_value = 1.0  # Not enough disagreements for meaningful test
+            p_value = 1.0
         else:
-            # McNemar's test statistic
             chi2_stat = (abs(a_correct_b_wrong - a_wrong_b_correct) - 1)**2 / (a_correct_b_wrong + a_wrong_b_correct)
             p_value = 1 - stats.chi2.cdf(chi2_stat, df=1)
         
@@ -384,14 +533,11 @@ class LLMJudgeMetrics:
         
         # Detailed Comparison Table
         html_parts.append('<div class="section"><h2>🔍 Detailed Metrics Comparison</h2>')
-        
-        # Create HTML table
         html_parts.append('<table class="comparison-table">')
-        
-        # Header
         html_parts.append('<thead><tr><th>System</th>')
+        
         key_metrics = ['accuracy', 'f1_score', 'auc', 'ece', 'avg_reasoning_depth']
-        if any('roundtable_samples' in comparison_df.columns for _ in comparison_df.index):
+        if 'roundtable_samples' in comparison_df.columns and any(comparison_df['roundtable_samples'] > 0):
             key_metrics.extend(['avg_conversation_length', 'avg_debate_quality', 'avg_participation_balance'])
         
         for metric in key_metrics:
@@ -407,7 +553,6 @@ class LLMJudgeMetrics:
                 if metric in comparison_df.columns:
                     value = comparison_df.loc[system, metric]
                     if pd.notna(value):
-                        # Highlight best scores
                         is_best = abs(value - comparison_df[metric].max()) < 1e-6
                         cell_class = 'class="best-score"' if is_best and len(comparison_df) > 1 else ''
                         html_parts.append(f'<td {cell_class}>{value:.3f}</td>')
@@ -441,73 +586,24 @@ class LLMJudgeMetrics:
             
             html_parts.append('</tbody></table></div>')
         
-        # Roundtable-Specific Analysis
-        roundtable_systems = [s for s in comparison_df.index if comparison_df.loc[s, 'roundtable_samples'] > 0]
-        if roundtable_systems:
-            html_parts.append('<div class="section"><h2>🗣️ Roundtable Discussion Analysis</h2>')
-            
-            for system in roundtable_systems:
-                rt_metrics = self.compute_roundtable_specific_metrics(system)
-                html_parts.append(f"""
-                <div class="metric-card" style="margin: 1rem 0;">
-                    <div class="metric-title">{system} - Roundtable Metrics</div>
-                    <div class="metric-grid" style="grid-template-columns: repeat(4, 1fr);">
-                        <div><strong>Avg Conversation Length:</strong> {rt_metrics.get('avg_conversation_length', 0):.1f} turns</div>
-                        <div><strong>Consensus Rate:</strong> {rt_metrics.get('avg_consensus_rate', 0):.2%}</div>
-                        <div><strong>Debate Quality:</strong> {rt_metrics.get('avg_debate_quality', 0):.3f}</div>
-                        <div><strong>Participation Balance:</strong> {rt_metrics.get('avg_participation_balance', 0):.3f}</div>
-                    </div>
-                </div>
-                """)
-        
-        # Error Analysis by Category
-        html_parts.append('<div class="section"><h2>🎯 Performance by Category</h2>')
-        html_parts.append('<table class="comparison-table">')
-        html_parts.append('<thead><tr><th>System</th><th>Easy</th><th>Medium</th><th>Hard</th><th>Logical Errors</th><th>Factual Errors</th></tr></thead>')
-        html_parts.append('<tbody>')
-        
-        for system in comparison_df.index:
-            adv_metrics = self.compute_advanced_metrics(system)
-            html_parts.append(f"""
-            <tr>
-                <td><strong>{system}</strong></td>
-                <td>{adv_metrics.get('accuracy_easy', 0):.3f}</td>
-                <td>{adv_metrics.get('accuracy_medium', 0):.3f}</td>
-                <td>{adv_metrics.get('accuracy_hard', 0):.3f}</td>
-                <td>{adv_metrics.get('accuracy_logical', 0):.3f}</td>
-                <td>{adv_metrics.get('accuracy_factual', 0):.3f}</td>
-            </tr>
-            """)
-        
-        html_parts.append('</tbody></table></div>')
-        
-        # Recommendations
-        html_parts.append('<div class="section"><h2>💡 Key Insights & Recommendations</h2>')
-        
+        # Best Performing System
         best_system = comparison_df['accuracy'].idxmax()
         best_accuracy = comparison_df.loc[best_system, 'accuracy']
         
         html_parts.append(f"""
-        <div class="metric-card">
-            <h3>🏆 Best Performing System: {best_system}</h3>
-            <ul>
-                <li><strong>Overall Accuracy:</strong> {best_accuracy:.3f}</li>
-                <li><strong>F1 Score:</strong> {comparison_df.loc[best_system, 'f1_score']:.3f}</li>
-                <li><strong>Calibration (ECE):</strong> {comparison_df.loc[best_system, 'ece']:.3f} (lower is better)</li>
-            </ul>
+        <div class="section">
+            <h2>💡 Key Insights</h2>
+            <div class="metric-card">
+                <h3>🏆 Best Performing System: {best_system}</h3>
+                <ul>
+                    <li><strong>Overall Accuracy:</strong> {best_accuracy:.3f}</li>
+                    <li><strong>F1 Score:</strong> {comparison_df.loc[best_system, 'f1_score']:.3f}</li>
+                    <li><strong>Calibration (ECE):</strong> {comparison_df.loc[best_system, 'ece']:.3f} (lower is better)</li>
+                </ul>
+            </div>
         </div>
         """)
         
-        if roundtable_systems:
-            best_rt = max(roundtable_systems, key=lambda s: comparison_df.loc[s, 'avg_debate_quality'])
-            html_parts.append(f"""
-            <div class="metric-card">
-                <h3>🗣️ Best Roundtable System: {best_rt}</h3>
-                <p>Shows superior collaborative reasoning with high debate quality and balanced agent participation.</p>
-            </div>
-            """)
-        
-        html_parts.append('</div>')
         html_parts.append('</body></html>')
         
         with open(output_path, 'w', encoding='utf-8') as f:

@@ -1,18 +1,150 @@
 {
-  "generated_at": "2025-08-16T08:05:00.663033Z",
-  "results_dir": "/home/hb/Projects/hb/HEDA/results/custom_eval",
-  "files": [
-    {
-      "file": "claude_single.jsonl",
-      "num_lines": 0,
-      "systems_in_file": []
+  "comparison": {
+    "accuracy": {
+      "HEDA-RoundTable": 0.6667,
+      "GPT4-Single": 0.3333,
+      "Claude-Single": 0.3333
     },
-    {
-      "file": "gpt4_single.jsonl",
-      "num_lines": 0,
-      "systems_in_file": []
+    "precision": {
+      "HEDA-RoundTable": 0.6667,
+      "GPT4-Single": 0.0,
+      "Claude-Single": 0.0
+    },
+    "recall": {
+      "HEDA-RoundTable": 1.0,
+      "GPT4-Single": 0.0,
+      "Claude-Single": 0.0
+    },
+    "f1_score": {
+      "HEDA-RoundTable": 0.8,
+      "GPT4-Single": 0.0,
+      "Claude-Single": 0.0
+    },
+    "auc": {
+      "HEDA-RoundTable": 0.5,
+      "GPT4-Single": 0.5,
+      "Claude-Single": 0.5
+    },
+    "ece": {
+      "HEDA-RoundTable": 0.2333,
+      "GPT4-Single": 0.1667,
+      "Claude-Single": 0.1667
+    },
+    "confident_correct": {
+      "HEDA-RoundTable": 0.6667,
+      "GPT4-Single": 0.0,
+      "Claude-Single": 0.0
+    },
+    "uncertain_correct": {
+      "HEDA-RoundTable": 0.0,
+      "GPT4-Single": 0.3333,
+      "Claude-Single": 0.3333
+    },
+    "sample_count": {
+      "HEDA-RoundTable": 6.0,
+      "GPT4-Single": 6.0,
+      "Claude-Single": 6.0
+    },
+    "accuracy_medium": {
+      "HEDA-RoundTable": 1.0,
+      "GPT4-Single": 0.0,
+      "Claude-Single": 0.0
+    },
+    "confidence_medium": {
+      "HEDA-RoundTable": 0.9,
+      "GPT4-Single": 0.5,
+      "Claude-Single": 0.5
+    },
+    "accuracy_easy": {
+      "HEDA-RoundTable": 0.3333,
+      "GPT4-Single": 0.6667,
+      "Claude-Single": 0.6667
+    },
+    "confidence_easy": {
+      "HEDA-RoundTable": 0.9,
+      "GPT4-Single": 0.5,
+      "Claude-Single": 0.5
+    },
+    "accuracy_mathematics": {
+      "HEDA-RoundTable": 1.0,
+      "GPT4-Single": 0.0,
+      "Claude-Single": 0.0
+    },
+    "accuracy_geometry": {
+      "HEDA-RoundTable": 0.0,
+      "GPT4-Single": 1.0,
+      "Claude-Single": 1.0
+    },
+    "accuracy_number_theory": {
+      "HEDA-RoundTable": 1.0,
+      "GPT4-Single": 0.0,
+      "Claude-Single": 0.0
+    },
+    "accuracy_physics": {
+      "HEDA-RoundTable": 0.0,
+      "GPT4-Single": 1.0,
+      "Claude-Single": 1.0
+    },
+    "accuracy_chemistry": {
+      "HEDA-RoundTable": 1.0,
+      "GPT4-Single": 0.0,
+      "Claude-Single": 0.0
+    },
+    "accuracy_geography": {
+      "HEDA-RoundTable": 1.0,
+      "GPT4-Single": 0.0,
+      "Claude-Single": 0.0
+    },
+    "accuracy_calculation": {
+      "HEDA-RoundTable": 1.0,
+      "GPT4-Single": 0.0,
+      "Claude-Single": 0.0
+    },
+    "accuracy_none": {
+      "HEDA-RoundTable": 0.0,
+      "GPT4-Single": 1.0,
+      "Claude-Single": 1.0
+    },
+    "accuracy_logical": {
+      "HEDA-RoundTable": 1.0,
+      "GPT4-Single": 0.0,
+      "Claude-Single": 0.0
+    },
+    "accuracy_factual": {
+      "HEDA-RoundTable": 1.0,
+      "GPT4-Single": 0.0,
+      "Claude-Single": 0.0
+    },
+    "avg_reasoning_depth": {
+      "HEDA-RoundTable": 1.0,
+      "GPT4-Single": 1.0,
+      "Claude-Single": 1.0
+    },
+    "avg_explanation_quality": {
+      "HEDA-RoundTable": 0.1,
+      "GPT4-Single": 0.0,
+      "Claude-Single": 0.0
+    },
+    "consistency_score": {
+      "HEDA-RoundTable": 1.0,
+      "GPT4-Single": 1.0,
+      "Claude-Single": 1.0
+    },
+    "robustness_score": {
+      "HEDA-RoundTable": 0.4226,
+      "GPT4-Single": 0.0,
+      "Claude-Single": 0.0
+    },
+    "roundtable_samples": {
+      "HEDA-RoundTable": 0.0,
+      "GPT4-Single": 0.0,
+      "Claude-Single": 0.0
     }
+  },
+  "systems": [
+    "HEDA-RoundTable",
+    "GPT4-Single",
+    "Claude-Single"
   ],
-  "systems": [],
-  "total_examples": 0
+  "sample_count": 6
 }

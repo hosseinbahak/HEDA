@@ -1,0 +1,6 @@
+{"id": "bat_and_ball", "prediction": {"has_error": true, "confidence": 0.9, "explanation": "Mock response: detected logical error"}}
+{"id": "triangle_angles", "prediction": {"has_error": true, "confidence": 0.9, "explanation": "Mock response: detected logical error"}}
+{"id": "prime_sum_always_even", "prediction": {"has_error": true, "confidence": 0.9, "explanation": "Mock response: detected logical error"}}
+{"id": "gravity_moon_correct", "prediction": {"has_error": true, "confidence": 0.9, "explanation": "Mock response: detected logical error"}}
+{"id": "water_boiling_misleading", "prediction": {"has_error": true, "confidence": 0.9, "explanation": "Mock response: detected logical error"}}
+{"id": "australia_capital", "prediction": {"has_error": true, "confidence": 0.9, "explanation": "Mock response: detected logical error"}}
