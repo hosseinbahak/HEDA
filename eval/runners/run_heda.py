@@ -1,115 +1,64 @@
-# eval/runners/run_heda.py
-import argparse, json, os, sys, time, signal
-from typing import Dict, Any
-from concurrent.futures import ThreadPoolExecutor, TimeoutError as FuturesTimeout
-from app.orchestrator import Orchestrator
+#!/usr/bin/env python
+# -*- coding: utf-8 -*-
 
-DEFAULT_TIMEOUT_SECS = int(os.getenv("RUNNER_SAMPLE_TIMEOUT", "90"))
+"""
+HEDA round-table runner.
+Reads a JSONL dataset and writes a JSONL of HEDA-style verdicts via the Orchestrator.
+"""
 
-def ensure_dir(path: str):
-    d = os.path.dirname(path)
-    if d and not os.path.exists(d):
-        os.makedirs(d, exist_ok=True)
+from __future__ import annotations
 
-def load_jsonl(path: str):
-    with open(path, "r", encoding="utf-8") as f:
-        for i, line in enumerate(f, start=1):
+import argparse
+import json
+import sys
+from pathlib import Path
+from datetime import datetime
+
+# --- Make sure project root is on sys.path ---
+THIS_FILE = Path(__file__).resolve()
+PROJECT_ROOT = THIS_FILE.parents[2]  # .../HEDA
+if str(PROJECT_ROOT) not in sys.path:
+    sys.path.append(str(PROJECT_ROOT))
+
+from app.orchestrator import Orchestrator  # noqa: E402
+
+
+def read_jsonl(p: Path):
+    with p.open("r", encoding="utf-8") as f:
+        for line in f:
             line = line.strip()
             if not line:
                 continue
-            try:
-                rec = json.loads(line)
-            except json.JSONDecodeError as e:
-                print(f"[reader] JSON error on line {i}: {e}", file=sys.stderr)
-                continue
-            rid = rec.get("id", f"line_{i}")
-            print(f"[reader] loaded #{i}: id={rid}")
-            yield rec
+            yield json.loads(line)
 
-def normalize(record: Dict[str, Any], result: Dict[str, Any]) -> Dict[str, Any]:
-    # Expect orchestrator returns { summary:{ has_error, verdict, confidence, ... }, ... }
-    s = result.get("summary", {})
-    return {
-        "id": record.get("id"),
-        "prediction": {
-            "has_error": bool(s.get("has_error", False)),
-            "verdict": s.get("verdict", "No Significant Errors"),
-            "confidence": float(s.get("confidence", 0.0)),
-            "charges": (result.get("round", {})
-                        .get("prosecutor", {})
-                        .get("content", {})
-                        .get("case_file", [])) or []
-        },
-        "meta": {
-            "framework": "HEDA",
-            "version": os.getenv("HEDA_VERSION", "runner-1.0"),
-        }
-    }
-
-def evaluate_one(orchestrator: Orchestrator, prompt: str) -> Dict[str, Any]:
-    return orchestrator.evaluate_text(prompt)
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--input", required=True, help="Path to JSONL with {id, prompt, gold_has_error}")
-    ap.add_argument("--out", required=True, help="Path to write predictions JSONL")
+    ap.add_argument("--input", required=True, help="Path to input JSONL")
+    ap.add_argument("--out", required=True, help="Path to output JSONL")
+    ap.add_argument("--max_rounds", type=int, default=1)
+    ap.add_argument("--consensus_threshold", type=float, default=0.7)
+    ap.add_argument("--confidence_threshold", type=float, default=0.6)
     args = ap.parse_args()
 
-    ensure_dir(args.out)
+    in_path = (PROJECT_ROOT / args.input) if not args.input.startswith(str(PROJECT_ROOT)) else Path(args.input)
+    out_path = (PROJECT_ROOT / args.out) if not args.out.startswith(str(PROJECT_ROOT)) else Path(args.out)
+    out_path.parent.mkdir(parents=True, exist_ok=True)
 
-    # Make sure we don’t accidentally hit OpenRouter if you didn’t mean to.
-    # Set USE_OPENROUTER=true in .env to use live models.
-    use_openrouter = os.getenv("USE_OPENROUTER", "false").lower() == "true"
-    if not use_openrouter:
-        os.environ["FALLBACK_TO_MOCK_ON_ERROR"] = "true"
+    orch = Orchestrator(
+        max_rounds=args.max_rounds,
+        consensus_threshold=args.consensus_threshold,
+        confidence_threshold=args.confidence_threshold,
+    )
 
-    # One orchestrator reused across items (faster)
-    orch = Orchestrator()
+    with out_path.open("w", encoding="utf-8") as w:
+        for ex in read_jsonl(in_path):
+            result = orch.evaluate_example(ex)
+            result["timestamp"] = datetime.utcnow().isoformat() + "Z"
+            result["system"] = "HEDA-RoundTable"
+            w.write(json.dumps(result, ensure_ascii=False) + "\n")
 
-    total = 0
-    ok = 0
-    failed = 0
-    start_all = time.time()
-
-    def sigint_handler(signum, frame):
-        print("\n[runner] Interrupted. Partial results are in:", args.out, file=sys.stderr)
-        sys.exit(130)
-    signal.signal(signal.SIGINT, sigint_handler)
-
-    with open(args.out, "a", encoding="utf-8") as fw, ThreadPoolExecutor(max_workers=1) as pool:
-        for rec in load_jsonl(args.input):
-            total += 1
-            rid = rec.get("id", f"sample_{total}")
-            prompt = rec.get("prompt", "")
-            print(f"[{total}] {rid} …", end="", flush=True)
-
-            fut = pool.submit(evaluate_one, orch, prompt)
-            try:
-                result = fut.result(timeout=DEFAULT_TIMEOUT_SECS)
-                pred = normalize(rec, result)
-                fw.write(json.dumps(pred, ensure_ascii=False) + "\n")
-                fw.flush()
-                os.fsync(fw.fileno())
-                ok += 1
-                print(" done")
-            except FuturesTimeout:
-                failed += 1
-                fut.cancel()
-                err = {"id": rid, "error": f"timeout_{DEFAULT_TIMEOUT_SECS}s"}
-                fw.write(json.dumps({"id": rid, "prediction": {"has_error": False, "verdict": "Timeout", "confidence": 0.0, "charges": []}, "meta": {"framework": "HEDA", "version": "runner-1.0", "error": err["error"]}}) + "\n")
-                fw.flush()
-                os.fsync(fw.fileno())
-                print(f" TIMEOUT ({DEFAULT_TIMEOUT_SECS}s)")
-            except Exception as e:
-                failed += 1
-                fw.write(json.dumps({"id": rid, "prediction": {"has_error": False, "verdict": "RunnerException", "confidence": 0.0, "charges": []}, "meta": {"framework": "HEDA", "version": "runner-1.0", "error": str(e)}}) + "\n")
-                fw.flush()
-                os.fsync(fw.fileno())
-                print(f" ERROR: {e}")
-
-    dur = time.time() - start_all
-    print(f"\n[runner] finished: total={total} ok={ok} failed={failed} time={dur:.1f}s")
-    print(f"[runner] wrote: {args.out}")
+    print(f"✅ HEDA wrote results to {out_path}")
 
 if __name__ == "__main__":
     main()

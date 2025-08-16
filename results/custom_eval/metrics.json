@@ -1,0 +1,18 @@
+{
+  "generated_at": "2025-08-16T08:05:00.663033Z",
+  "results_dir": "/home/hb/Projects/hb/HEDA/results/custom_eval",
+  "files": [
+    {
+      "file": "claude_single.jsonl",
+      "num_lines": 0,
+      "systems_in_file": []
+    },
+    {
+      "file": "gpt4_single.jsonl",
+      "num_lines": 0,
+      "systems_in_file": []
+    }
+  ],
+  "systems": [],
+  "total_examples": 0
+}

@@ -1,0 +1,33 @@
+{
+  "timestamp": 1755331709.6809947,
+  "dataset": "eval/datasets/enhanced_reasoning.jsonl",
+  "systems": {
+    "HEDA-RoundTable": {
+      "status": "failed",
+      "duration": 0.7117764949798584,
+      "returncode": 2,
+      "stdout": "",
+      "stderr": "usage: run_heda.py [-h] --input INPUT --out OUT [--max_rounds MAX_ROUNDS]\n                   [--consensus_threshold CONSENSUS_THRESHOLD]\n                   [--confidence_threshold CONFIDENCE_THRESHOLD]\nrun_heda.py: error: unrecognized arguments: --mode roundtable\n"
+    },
+    "GPT4-Single": {
+      "status": "success",
+      "duration": 0.058483123779296875,
+      "sample_count": 6,
+      "output_file": "results/custom_eval/gpt4-single_results.jsonl",
+      "stdout": "",
+      "stderr": "/home/hb/Projects/hb/HEDA/eval/runners/run_single_llm.py:39: DeprecationWarning: datetime.datetime.utcnow() is deprecated and scheduled for removal in a future version. Use timezone-aware objects to represent datetimes in UTC: datetime.datetime.now(datetime.UTC).\n  \"timestamp\": datetime.utcnow().isoformat() + \"Z\",\n"
+    },
+    "Claude-Single": {
+      "status": "success",
+      "duration": 0.05770111083984375,
+      "sample_count": 6,
+      "output_file": "results/custom_eval/claude-single_results.jsonl",
+      "stdout": "",
+      "stderr": "/home/hb/Projects/hb/HEDA/eval/runners/run_single_llm.py:39: DeprecationWarning: datetime.datetime.utcnow() is deprecated and scheduled for removal in a future version. Use timezone-aware objects to represent datetimes in UTC: datetime.datetime.now(datetime.UTC).\n  \"timestamp\": datetime.utcnow().isoformat() + \"Z\",\n"
+    }
+  },
+  "config": {
+    "parallel": false,
+    "timeout": 120
+  }
+}
